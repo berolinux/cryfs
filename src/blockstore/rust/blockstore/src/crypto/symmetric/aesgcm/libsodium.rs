@@ -10,7 +10,7 @@ use std::sync::Once;
 use super::super::{Cipher, EncryptionKey};
 use super::{AUTH_TAG_SIZE, NONCE_SIZE};
 
-use crate::data::Data;
+use crate::data::{Data, GrowableData};
 
 static INIT_LIBSODIUM: Once = Once::new();
 
@@ -49,7 +49,10 @@ impl Cipher for Aes256Gcm {
         }
     }
 
-    fn encrypt(&self, mut plaintext: Data) -> Result<Data> {
+    fn encrypt<const PREFIX_BYTES: usize>(
+        &self,
+        mut plaintext: GrowableData<PREFIX_BYTES, 0>,
+    ) -> Result<GrowableData<{ PREFIX_BYTES - Self::CIPHERTEXT_OVERHEAD }, 0>> {
         // TODO Is this data layout compatible with the C++ version of EncryptedBlockStore2?
         // TODO Use binary-layout here?
         let ciphertext_size = plaintext.len() + Self::CIPHERTEXT_OVERHEAD;
@@ -65,8 +68,7 @@ impl Cipher for Aes256Gcm {
                 &nonce,
                 &convert_key(&self.encryption_key),
             );
-        let mut ciphertext = plaintext.grow_region(Self::CIPHERTEXT_OVERHEAD, 0).context(
-            "Tried to add prefix bytes so we can store ciphertext overhead in libsodium::Aes256Gcm::encrypt").unwrap();
+        let mut ciphertext = plaintext.grow_region::<{ Self::CIPHERTEXT_OVERHEAD }, 0>();
         ciphertext[0..NONCE_SIZE].copy_from_slice(nonce.as_ref());
         ciphertext[NONCE_SIZE..(NONCE_SIZE + AUTH_TAG_SIZE)].copy_from_slice(auth_tag.as_ref());
         assert_eq!(ciphertext_size, ciphertext.len());

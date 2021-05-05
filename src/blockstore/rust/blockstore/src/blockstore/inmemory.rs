@@ -1,12 +1,16 @@
 use anyhow::{anyhow, Result};
 use std::collections::hash_map::HashMap;
+use std::convert::TryInto;
 use std::sync::RwLock;
 use sysinfo::{System, SystemExt};
 
-use super::{BlockId, BlockStore, BlockStoreDeleter, BlockStoreReader, OptimizedBlockStoreWriter};
+use super::{
+    BlockId, BlockStore, BlockStoreDeleter, BlockStoreReader, OptimizedBlockStoreWriter,
+    OptimizedBlockStoreWriterMetadata,
+};
 
 use super::block_data::IBlockData;
-use crate::data::Data;
+use crate::data::{Data, GrowableData};
 
 pub struct InMemoryBlockStore {
     blocks: RwLock<HashMap<BlockId, Data>>,
@@ -72,14 +76,20 @@ impl BlockStoreDeleter for InMemoryBlockStore {
 
 create_block_data_wrapper!(BlockData);
 
+impl OptimizedBlockStoreWriterMetadata for InMemoryBlockStore {
+    const REQUIRED_PREFIX_BYTES_SELF: usize = 0;
+    const REQUIRED_PREFIX_BYTES_TOTAL: usize = Self::REQUIRED_PREFIX_BYTES_SELF;
+}
 impl OptimizedBlockStoreWriter for InMemoryBlockStore {
-    type BlockData = BlockData;
-
-    fn allocate(size: usize) -> BlockData {
-        BlockData::new(Data::from(vec![0; size]))
+    fn allocate(size: usize) -> GrowableData<{ Self::REQUIRED_PREFIX_BYTES_TOTAL }, 0> {
+        Data::from(vec![0; size]).try_into().unwrap()
     }
 
-    fn try_create_optimized(&self, id: &BlockId, data: BlockData) -> Result<bool> {
+    fn try_create_optimized(
+        &self,
+        id: &BlockId,
+        data: GrowableData<{ Self::REQUIRED_PREFIX_BYTES_TOTAL }, 0>,
+    ) -> Result<bool> {
         let mut blocks = self
             .blocks
             .write()
@@ -96,7 +106,11 @@ impl OptimizedBlockStoreWriter for InMemoryBlockStore {
         }
     }
 
-    fn store_optimized(&self, id: &BlockId, data: BlockData) -> Result<()> {
+    fn store_optimized(
+        &self,
+        id: &BlockId,
+        data: GrowableData<{ Self::REQUIRED_PREFIX_BYTES_TOTAL }, 0>,
+    ) -> Result<()> {
         let mut blocks = self
             .blocks
             .write()

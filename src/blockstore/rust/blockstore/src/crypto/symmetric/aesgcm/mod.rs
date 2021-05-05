@@ -8,7 +8,7 @@ use log::warn;
 mod libsodium;
 
 use super::{Cipher, EncryptionKey};
-use crate::data::Data;
+use crate::data::{Data, GrowableData};
 
 const NONCE_SIZE: usize = 12;
 const AUTH_TAG_SIZE: usize = 16;
@@ -45,7 +45,10 @@ impl Cipher for Aes256Gcm {
         }
     }
 
-    fn encrypt(&self, plaintext: Data) -> Result<Data> {
+    fn encrypt<const PREFIX_BYTES: usize>(
+        &self,
+        mut plaintext: GrowableData<PREFIX_BYTES, 0>,
+    ) -> Result<GrowableData<{ PREFIX_BYTES - Self::CIPHERTEXT_OVERHEAD }, 0>> {
         match &self.0 {
             Aes256GcmImpl::HardwareAccelerated(i) => i.encrypt(plaintext),
             Aes256GcmImpl::SoftwareImplementation(i) => i.encrypt(plaintext),

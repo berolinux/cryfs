@@ -10,7 +10,7 @@ use rand::{thread_rng, RngCore};
 use std::marker::PhantomData;
 
 use super::{Cipher, EncryptionKey};
-use crate::data::Data;
+use crate::data::{Data, GrowableData};
 
 // TODO The aes-gcm crate currently needs
 // > RUSTFLAGS="-Ctarget-cpu=sandybridge -Ctarget-feature=+aes,+sse2,+sse4.1,+ssse3"
@@ -38,7 +38,10 @@ impl<C: NewAead + AeadInPlace> Cipher for AeadCipher<C> {
         }
     }
 
-    fn encrypt(&self, mut plaintext: Data) -> Result<Data> {
+    fn encrypt<const PREFIX_BYTES: usize>(
+        &self,
+        mut plaintext: GrowableData<PREFIX_BYTES, 0>,
+    ) -> Result<GrowableData<{ PREFIX_BYTES - Self::CIPHERTEXT_OVERHEAD }, 0>> {
         // TODO Move C::new call to constructor so we don't have to do it every time?
         //      Is it actually expensive? Note that we have to somehow migrate the
         //      secret protection we get from our EncryptionKey class then.
@@ -50,8 +53,7 @@ impl<C: NewAead + AeadInPlace> Cipher for AeadCipher<C> {
         let auth_tag = cipher
             .encrypt_in_place_detached(&nonce, &[], plaintext.as_mut())
             .context("Encrypting data failed")?;
-        let mut ciphertext = plaintext.grow_region(Self::CIPHERTEXT_OVERHEAD, 0).context(
-                "Tried to add prefix bytes so we can store ciphertext overhead in libsodium::Aes256Gcm::encrypt").unwrap();
+        let mut ciphertext = plaintext.grow_region::<{ Self::CIPHERTEXT_OVERHEAD }, 0>();
         ciphertext[0..C::NonceSize::USIZE].copy_from_slice(nonce.as_ref());
         ciphertext[C::NonceSize::USIZE..(C::NonceSize::USIZE + C::TagSize::USIZE)]
             .copy_from_slice(auth_tag.as_ref());

@@ -1,10 +1,14 @@
 use anyhow::{anyhow, bail, Context, Result};
+use std::convert::TryInto;
 
-use super::{BlockId, BlockStore, BlockStoreDeleter, BlockStoreReader, OptimizedBlockStoreWriter};
+use super::{
+    BlockId, BlockStore, BlockStoreDeleter, BlockStoreReader, OptimizedBlockStoreWriter,
+    OptimizedBlockStoreWriterMetadata,
+};
 
 use super::block_data::IBlockData;
 use crate::crypto::symmetric::Cipher;
-use crate::data::Data;
+use crate::data::{Data, GrowableData};
 
 const FORMAT_VERSION_HEADER: &[u8; 2] = &1u16.to_ne_bytes();
 
@@ -60,43 +64,77 @@ impl<C: Cipher, B: BlockStoreDeleter> BlockStoreDeleter for EncryptedBlockStore<
 
 create_block_data_wrapper!(BlockData);
 
+impl<C: Cipher, B: OptimizedBlockStoreWriterMetadata> OptimizedBlockStoreWriterMetadata
+    for EncryptedBlockStore<C, B>
+{
+    const REQUIRED_PREFIX_BYTES_SELF: usize = FORMAT_VERSION_HEADER.len() + C::CIPHERTEXT_OVERHEAD;
+    const REQUIRED_PREFIX_BYTES_TOTAL: usize =
+        B::REQUIRED_PREFIX_BYTES_TOTAL + Self::REQUIRED_PREFIX_BYTES_SELF;
+}
+
 impl<C: Cipher, B: OptimizedBlockStoreWriter> OptimizedBlockStoreWriter
     for EncryptedBlockStore<C, B>
+where
+    [(); { B::REQUIRED_PREFIX_BYTES_TOTAL - B::REQUIRED_PREFIX_BYTES_SELF }]: ,
+    [(); { Self::REQUIRED_PREFIX_BYTES_TOTAL - Self::REQUIRED_PREFIX_BYTES_SELF }]: ,
 {
-    type BlockData = BlockData;
-
-    fn allocate(size: usize) -> Self::BlockData {
-        let data = B::allocate(FORMAT_VERSION_HEADER.len() + C::CIPHERTEXT_OVERHEAD + size)
-            .extract()
-            .into_subregion((FORMAT_VERSION_HEADER.len() + C::CIPHERTEXT_OVERHEAD)..);
-        BlockData::new(data)
+    fn allocate(size: usize) -> GrowableData<{ Self::REQUIRED_PREFIX_BYTES_TOTAL }, 0> {
+        Data::from(vec![0; Self::REQUIRED_PREFIX_BYTES_TOTAL + size])
+            .into_subregion(Self::REQUIRED_PREFIX_BYTES_TOTAL..)
+            .try_into()
+            .unwrap()
     }
 
-    fn try_create_optimized(&self, id: &BlockId, data: Self::BlockData) -> Result<bool> {
-        let ciphertext = self._encrypt(data.extract())?;
+    fn try_create_optimized(
+        &self,
+        id: &BlockId,
+        data: GrowableData<{ Self::REQUIRED_PREFIX_BYTES_TOTAL }, 0>,
+    ) -> Result<bool> {
+        // TODO remove try_into / extract
+        let ciphertext: GrowableData<{ Self::REQUIRED_PREFIX_BYTES_TOTAL }, 0> =
+            data.extract().try_into().unwrap();
+        let ciphertext = self._encrypt(ciphertext)?;
         self.underlying_block_store
-            .try_create_optimized(id, B::BlockData::new(ciphertext))
+            .try_create_optimized(id, ciphertext)
     }
 
-    fn store_optimized(&self, id: &BlockId, data: Self::BlockData) -> Result<()> {
-        let ciphertext = self._encrypt(data.extract())?;
-        self.underlying_block_store
-            .store_optimized(id, B::BlockData::new(ciphertext))
+    fn store_optimized(
+        &self,
+        id: &BlockId,
+        data: GrowableData<{ Self::REQUIRED_PREFIX_BYTES_TOTAL }, 0>,
+    ) -> Result<()> {
+        // TODO remove try_into / extract
+        let ciphertext: GrowableData<{ Self::REQUIRED_PREFIX_BYTES_TOTAL }, 0> =
+            data.extract().try_into().unwrap();
+        let ciphertext = self._encrypt(ciphertext)?;
+        self.underlying_block_store.store_optimized(id, ciphertext)
     }
 }
 
-impl<C: Cipher, B: BlockStore + OptimizedBlockStoreWriter> BlockStore
-    for EncryptedBlockStore<C, B>
+impl<C: Cipher, B: BlockStore + OptimizedBlockStoreWriter> BlockStore for EncryptedBlockStore<C, B>
+where
+    [(); { Self::REQUIRED_PREFIX_BYTES_TOTAL - Self::REQUIRED_PREFIX_BYTES_SELF }]: ,
+    [(); { B::REQUIRED_PREFIX_BYTES_TOTAL - B::REQUIRED_PREFIX_BYTES_SELF }]: ,
 {
 }
 
-impl<C: Cipher, B> EncryptedBlockStore<C, B> {
-    fn _encrypt(&self, plaintext: Data) -> Result<Data> {
+impl<C: Cipher, B: OptimizedBlockStoreWriter> EncryptedBlockStore<C, B>
+where
+    [(); { Self::REQUIRED_PREFIX_BYTES_TOTAL - Self::REQUIRED_PREFIX_BYTES_SELF }]: ,
+    [(); { B::REQUIRED_PREFIX_BYTES_TOTAL - B::REQUIRED_PREFIX_BYTES_SELF }]: ,
+{
+    fn _encrypt(
+        &self,
+        plaintext: GrowableData<{ Self::REQUIRED_PREFIX_BYTES_TOTAL }, 0>,
+    ) -> Result<
+        GrowableData<{ Self::REQUIRED_PREFIX_BYTES_TOTAL - Self::REQUIRED_PREFIX_BYTES_SELF }, 0>,
+    > {
         // TODO Avoid _prepend_header, instead directly encrypt into a pre-allocated cipherdata Vec<u8>
         let ciphertext = self.cipher.encrypt(plaintext)?;
         Ok(_prepend_header(ciphertext))
     }
-
+}
+impl<C: Cipher, B> EncryptedBlockStore<C, B> {
     fn _decrypt(&self, ciphertext: Data) -> Result<Data> {
         let ciphertext = _check_and_remove_header(ciphertext)?;
         self.cipher.decrypt(ciphertext).map(|d| d.into())
@@ -114,11 +152,15 @@ fn _check_and_remove_header(data: Data) -> Result<Data> {
     Ok(data.into_subregion(FORMAT_VERSION_HEADER.len()..))
 }
 
-fn _prepend_header(data: Data) -> Data {
+fn _prepend_header<const PREFIX_BYTES: usize>(
+    data: GrowableData<PREFIX_BYTES, 0>,
+) -> GrowableData<{ sub_header_len(PREFIX_BYTES) }, 0> {
     // TODO Use binary-layout here?
-    let mut data = data.grow_region(FORMAT_VERSION_HEADER.len(), 0).expect(
-        "Tried to grow the data to contain the header in EncryptedBlockStore::_prepend_header",
-    );
+    let mut data = data.grow_region::<{ FORMAT_VERSION_HEADER.len() }, 0>();
     data.as_mut()[..FORMAT_VERSION_HEADER.len()].copy_from_slice(FORMAT_VERSION_HEADER);
     data
+}
+
+const fn sub_header_len(size: usize) -> usize {
+    size - FORMAT_VERSION_HEADER.len()
 }

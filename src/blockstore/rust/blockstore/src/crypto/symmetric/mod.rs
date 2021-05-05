@@ -1,6 +1,8 @@
-use crate::data::Data;
 use anyhow::Result;
 use generic_array::ArrayLength;
+
+use crate::data::Data;
+use crate::data::GrowableData;
 
 pub trait Cipher: Sized {
     type KeySize: ArrayLength<u8>;
@@ -10,10 +12,18 @@ pub trait Cipher: Sized {
     // How many bytes is a ciphertext larger than a plaintext?
     const CIPHERTEXT_OVERHEAD: usize;
 
-    // TODO Can we make this API safer? It requires the data block passed in to have at least CIPHERTEXT_OVERHEAD prefix bytes available.
-    fn encrypt(&self, data: Data) -> Result<Data>;
+    fn encrypt<const PREFIX_BYTES: usize>(
+        &self,
+        data: GrowableData<PREFIX_BYTES, 0>,
+    ) -> Result<GrowableData<{ PREFIX_BYTES - Self::CIPHERTEXT_OVERHEAD }, 0>>;
 
     fn decrypt(&self, data: Data) -> Result<Data>;
+}
+
+fn encrypt<const PrefixBytes: usize>(
+    data: GrowableData<PrefixBytes, 0>,
+) -> GrowableData<{ PrefixBytes - 5 }, 0> {
+    todo!();
 }
 
 // TODO https://github.com/shadowsocks/crypto2 looks pretty fast, maybe we can use them for faster implementations?

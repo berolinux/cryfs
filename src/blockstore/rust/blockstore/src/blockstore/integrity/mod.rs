@@ -6,12 +6,12 @@ use std::sync::Mutex;
 
 use super::{
     BlockId, BlockStore, BlockStoreDeleter, BlockStoreReader, OptimizedBlockStoreWriter,
-    BLOCKID_LEN,
+    OptimizedBlockStoreWriterMetadata, BLOCKID_LEN,
 };
 
 mod known_block_versions;
 
-use crate::data::Data;
+use crate::data::{Data, GrowableData};
 use known_block_versions::{BlockVersion, ClientId, IntegrityViolationError, KnownBlockVersions};
 
 const FORMAT_VERSION_HEADER: u16 = 1;
@@ -111,18 +111,35 @@ impl<B: BlockStoreDeleter> BlockStoreDeleter for IntegrityBlockStore<B> {
 
 create_block_data_wrapper!(BlockData);
 
-impl<B: OptimizedBlockStoreWriter> OptimizedBlockStoreWriter for IntegrityBlockStore<B> {
-    type BlockData = BlockData;
-
-    fn allocate(size: usize) -> BlockData {
+impl<B: OptimizedBlockStoreWriterMetadata> OptimizedBlockStoreWriterMetadata
+    for IntegrityBlockStore<B>
+{
+    const REQUIRED_PREFIX_BYTES_SELF: usize = 0; // TODO
+    const REQUIRED_PREFIX_BYTES_TOTAL: usize =
+        B::REQUIRED_PREFIX_BYTES_TOTAL + Self::REQUIRED_PREFIX_BYTES_SELF;
+}
+impl<B: OptimizedBlockStoreWriter> OptimizedBlockStoreWriter for IntegrityBlockStore<B>
+where
+    [(); { B::REQUIRED_PREFIX_BYTES_TOTAL - B::REQUIRED_PREFIX_BYTES_SELF }]: ,
+    [(); { Self::REQUIRED_PREFIX_BYTES_TOTAL - Self::REQUIRED_PREFIX_BYTES_SELF }]: ,
+{
+    fn allocate(size: usize) -> GrowableData<{ Self::REQUIRED_PREFIX_BYTES_TOTAL }, 0> {
         todo!()
     }
 
-    fn try_create_optimized(&self, id: &BlockId, data: BlockData) -> Result<bool> {
+    fn try_create_optimized(
+        &self,
+        id: &BlockId,
+        data: GrowableData<{ Self::REQUIRED_PREFIX_BYTES_TOTAL }, 0>,
+    ) -> Result<bool> {
         todo!()
     }
 
-    fn store_optimized(&self, id: &BlockId, data: BlockData) -> Result<()> {
+    fn store_optimized(
+        &self,
+        id: &BlockId,
+        data: GrowableData<{ Self::REQUIRED_PREFIX_BYTES_TOTAL }, 0>,
+    ) -> Result<()> {
         todo!()
     }
 }
@@ -199,4 +216,9 @@ impl<B> IntegrityBlockStore<B> {
     }
 }
 
-impl<B: BlockStore + OptimizedBlockStoreWriter> BlockStore for IntegrityBlockStore<B> {}
+impl<B: BlockStore + OptimizedBlockStoreWriter> BlockStore for IntegrityBlockStore<B>
+where
+    [(); { Self::REQUIRED_PREFIX_BYTES_TOTAL - Self::REQUIRED_PREFIX_BYTES_SELF }]: ,
+    [(); { B::REQUIRED_PREFIX_BYTES_TOTAL - B::REQUIRED_PREFIX_BYTES_SELF }]: ,
+{
+}
