@@ -1,20 +1,28 @@
+use async_trait::async_trait;
 use lockable::LruOwnedGuard;
 use std::fmt::{self, Debug};
 
 use super::entry::BlockCacheEntry;
 use crate::blockstore::BlockId;
+use crate::utils::async_drop::{AsyncDrop, AsyncDropGuard};
 
 pub struct BlockCacheEntryGuard<B>
 where
     B: crate::blockstore::low_level::BlockStore + Send + Sync + Debug + 'static,
 {
-    pub(super) guard: LruOwnedGuard<BlockId, BlockCacheEntry<B>>,
+    guard: AsyncDropGuard<LruOwnedGuard<BlockId, BlockCacheEntry<B>>>,
 }
 
 impl<B> BlockCacheEntryGuard<B>
 where
     B: crate::blockstore::low_level::BlockStore + Send + Sync + Debug + 'static,
 {
+    pub fn new(
+        guard: AsyncDropGuard<LruOwnedGuard<BlockId, BlockCacheEntry<B>>>,
+    ) -> AsyncDropGuard<Self> {
+        AsyncDropGuard::new(Self { guard })
+    }
+
     pub fn key(&self) -> &BlockId {
         self.guard.key()
     }
@@ -38,5 +46,18 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "BlockCacheEntryGuard({:?})", self.guard)
+    }
+}
+
+#[async_trait]
+impl<B> AsyncDrop for BlockCacheEntryGuard<B>
+where
+    B: crate::blockstore::low_level::BlockStore + Send + Sync + Debug + 'static,
+{
+    type Error = anyhow::Error;
+
+    async fn async_drop_impl(&mut self) -> Result<(), Self::Error> {
+        self.guard.async_drop().await?;
+        Ok(())
     }
 }

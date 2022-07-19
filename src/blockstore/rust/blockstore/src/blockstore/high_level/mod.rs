@@ -17,10 +17,14 @@ mod cache;
 use cache::{BlockBaseStoreState, BlockCache, BlockCacheEntryGuard, CacheEntryState};
 
 pub struct Block<B: BlockStore + Send + Sync + Debug + 'static> {
-    cache_entry: BlockCacheEntryGuard<B>,
+    cache_entry: AsyncDropGuard<BlockCacheEntryGuard<B>>,
 }
 
 impl<B: super::low_level::BlockStore + Send + Sync + Debug> Block<B> {
+    fn new(cache_entry: AsyncDropGuard<BlockCacheEntryGuard<B>>) -> AsyncDropGuard<Self> {
+        AsyncDropGuard::new(Self { cache_entry })
+    }
+
     #[inline]
     pub fn block_id(&self) -> &BlockId {
         &self.cache_entry.key()
@@ -69,6 +73,15 @@ impl<B: super::low_level::BlockStore + Send + Sync + Debug + 'static> fmt::Debug
     }
 }
 
+#[async_trait]
+impl<B: super::low_level::BlockStore + Send + Sync + Debug> AsyncDrop for Block<B> {
+    type Error = anyhow::Error;
+
+    async fn async_drop_impl(&mut self) -> Result<()> {
+        self.cache_entry.async_drop().await
+    }
+}
+
 // TODO Should we require B: OptimizedBlockStoreWriter and use its methods?
 pub struct LockingBlockStore<B: super::low_level::BlockStore + Send + Sync + Debug + 'static> {
     // Always Some unless during destruction
@@ -88,7 +101,7 @@ impl<B: super::low_level::BlockStore + Send + Sync + Debug + 'static> LockingBlo
         })
     }
 
-    pub async fn load(&self, block_id: BlockId) -> Result<Option<Block<B>>> {
+    pub async fn load(&self, block_id: BlockId) -> Result<Option<AsyncDropGuard<Block<B>>>> {
         // TODO Cache non-existence?
         let mut cache_entry = self.cache.async_lock(block_id).await;
         if cache_entry.value().is_none() {
@@ -105,7 +118,7 @@ impl<B: super::low_level::BlockStore + Send + Sync + Debug + 'static> LockingBlo
             }
         }
         if cache_entry.value().is_some() {
-            Ok(Some(Block { cache_entry }))
+            Ok(Some(Block::new(cache_entry)))
         } else {
             Ok(None)
         }
@@ -216,7 +229,7 @@ impl<B: super::low_level::BlockStore + Send + Sync + Debug + 'static> LockingBlo
     pub async fn all_blocks(&self) -> Result<Pin<Box<dyn Stream<Item = Result<BlockId>> + Send>>> {
         let base_store = self.base_store.as_ref().expect("Already destructed");
 
-        let blocks_in_cache = self.cache.keys();
+        let blocks_in_cache = self.cache.keys().await;
         let blocks_in_base_store = base_store.all_blocks().await?;
 
         let blocks_in_cache_set: HashSet<_> = blocks_in_cache.iter().copied().collect();

@@ -71,6 +71,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6945cc5422176fc5e602e590c2878d2c2acd9a4fe20a4baa7c28022521698ec6"
 
 [[package]]
+name = "async-drop-guard"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b6c06997074c9821e65a75cc843592ffec5df613e6aa3d158fb0577a25a2b77"
+dependencies = [
+ "async-trait",
+ "futures",
+ "log",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -870,9 +881,11 @@ dependencies = [
 [[package]]
 name = "lockable"
 version = "0.0.2"
-source = "git+https://github.com/smessmer/lockable?rev=de484eb1715eba2e658f7d1ec82d129efd30f474#de484eb1715eba2e658f7d1ec82d129efd30f474"
+source = "git+https://github.com/smessmer/lockable?rev=ee352bb6dd1f7aef3266e153dd6879a1b63d0e84#ee352bb6dd1f7aef3266e153dd6879a1b63d0e84"
 dependencies = [
  "anyhow",
+ "async-drop-guard",
+ "async-trait",
  "futures",
  "lru 0.7.5",
  "owning_ref_lockable",

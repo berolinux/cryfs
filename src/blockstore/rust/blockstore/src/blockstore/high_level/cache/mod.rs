@@ -28,10 +28,14 @@ pub use guard::BlockCacheEntryGuard;
 const PRUNE_BLOCKS_INTERVAL: Duration = Duration::from_millis(500);
 // The cutoff age of blocks. Each time the task runs, blocks older than this will be pruned.
 const PRUNE_BLOCKS_OLDER_THAN: Duration = Duration::from_millis(500);
+// Maximal number of unlocked entries in the cache, i.e. entries that aren't currently
+// checked out from the cache and being processed.
+const MAX_NUM_CACHE_ENTRIES: usize = 1024;
 
 pub struct BlockCache<B: crate::blockstore::low_level::BlockStore + Send + Sync + Debug + 'static> {
     // Always Some except during destruction
     cache: Option<Arc<BlockCacheImpl<B>>>,
+
     // Always Some except during destruction
     prune_task: Option<AsyncDropGuard<PeriodicTask>>,
 }
@@ -53,7 +57,7 @@ impl<B: crate::blockstore::low_level::BlockStore + Send + Sync + Debug + 'static
         })
     }
 
-    pub async fn async_lock(&self, block_id: BlockId) -> BlockCacheEntryGuard<B> {
+    pub async fn async_lock(&self, block_id: BlockId) -> AsyncDropGuard<BlockCacheEntryGuard<B>> {
         self.cache
             .as_ref()
             .expect("Object is already destructed")
@@ -61,11 +65,12 @@ impl<B: crate::blockstore::low_level::BlockStore + Send + Sync + Debug + 'static
             .await
     }
 
-    pub fn keys(&self) -> Vec<BlockId> {
+    pub async fn keys(&self) -> Vec<BlockId> {
         self.cache
             .as_ref()
             .expect("Object is already destructed")
             .keys()
+            .await
     }
 
     pub fn delete_entry_from_cache_even_if_dirty(&self, entry: &mut BlockCacheEntryGuard<B>) {
@@ -130,7 +135,7 @@ impl<B: crate::blockstore::low_level::BlockStore + Send + Sync + Debug + 'static
         cache: &BlockCacheImpl<B>,
         duration: Duration,
     ) -> Result<()> {
-        let to_prune = cache.lock_entries_unlocked_for_at_least(duration);
+        let to_prune = cache.lock_entries_unlocked_for_at_least(duration).await;
         Self::_prune_blocks(cache, to_prune).await
     }
 
@@ -151,7 +156,7 @@ impl<B: crate::blockstore::low_level::BlockStore + Send + Sync + Debug + 'static
 
     async fn _prune_blocks(
         cache: &BlockCacheImpl<B>,
-        to_prune: impl Iterator<Item = LruGuard<'_, BlockId, BlockCacheEntry<B>>>,
+        to_prune: impl Iterator<Item = AsyncDropGuard<LruGuard<'_, BlockId, BlockCacheEntry<B>>>>,
     ) -> Result<()> {
         // Now we have a list of mutex guards, locking all keys that we want to prune.
         // The global mutex for the cache is unlocked, so other threads may now come in
@@ -181,7 +186,7 @@ impl<B: crate::blockstore::low_level::BlockStore + Send + Sync + Debug + 'static
 
     async fn _prune_block(
         cache: &BlockCacheImpl<B>,
-        mut guard: LruGuard<'_, BlockId, BlockCacheEntry<B>>,
+        mut guard: AsyncDropGuard<LruGuard<'_, BlockId, BlockCacheEntry<B>>>,
     ) -> Result<()> {
         // Write back the block data
         let block_id = *guard.key();
@@ -191,6 +196,8 @@ impl<B: crate::blockstore::low_level::BlockStore + Send + Sync + Debug + 'static
         entry.flush(&block_id).await?;
 
         cache.delete_entry_from_cache(&mut guard);
+
+        guard.async_drop().await?;
 
         Ok(())
     }

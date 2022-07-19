@@ -43,13 +43,13 @@ impl<B: crate::blockstore::low_level::BlockStore + Send + Sync + Debug + 'static
             .expect("Instance is currently being dropped")
     }
 
-    pub fn keys(&self) -> Vec<BlockId> {
-        self._cache().keys()
+    pub async fn keys(&self) -> Vec<BlockId> {
+        self._cache().keys().await
     }
 
-    pub async fn async_lock(&self, block_id: BlockId) -> BlockCacheEntryGuard<B> {
+    pub async fn async_lock(&self, block_id: BlockId) -> AsyncDropGuard<BlockCacheEntryGuard<B>> {
         let guard = self._cache().async_lock_owned(block_id).await;
-        BlockCacheEntryGuard { guard }
+        BlockCacheEntryGuard::new(guard)
     }
 
     pub fn delete_entry_from_cache<'a>(
@@ -175,17 +175,27 @@ impl<B: crate::blockstore::low_level::BlockStore + Send + Sync + Debug + 'static
             .load(Ordering::SeqCst)
     }
 
-    pub fn lock_entries_unlocked_for_at_least(
+    pub async fn lock_entries_unlocked_for_at_least(
         &self,
         duration: Duration,
-    ) -> impl Iterator<Item = LruGuard<'_, BlockId, BlockCacheEntry<B>>> {
-        self._cache().lock_entries_unlocked_for_at_least(duration)
+    ) -> impl Iterator<Item = AsyncDropGuard<LruGuard<'_, BlockId, BlockCacheEntry<B>>>> {
+        self._cache()
+            .lock_entries_unlocked_for_at_least(duration)
+            .await
     }
 
     pub async fn lock_all_entries(
         &self,
     ) -> impl Stream<Item = LruGuard<'_, BlockId, BlockCacheEntry<B>>> {
         self._cache().lock_all_entries().await
+    }
+
+    pub fn lock_all_unlocked_except_n_newest(
+        &self,
+        max_num_unlocked: usize,
+    ) -> impl Iterator<Item = LruGuard<'_, BlockId, BlockCacheEntry<B>>> {
+        self._cache()
+            .lock_all_unlocked_except_n_newest(max_num_unlocked)
     }
 
     pub async fn into_entries_unordered(
